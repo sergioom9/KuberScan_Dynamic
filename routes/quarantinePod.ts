@@ -10,11 +10,14 @@ import { Incident } from "../DB/incidents.ts";
 const router = express.Router();
 
 const kc = new KubeConfig();
-
 if (Deno.env.get("KUBERNETES_SERVICE_HOST")) {
   kc.loadFromCluster();
 } else {
-  kc.loadFromDefault();
+  try {
+    kc.loadFromDefault();
+  } catch (_err) {
+    // Dev mode without kubeconfig: DB sync should still work.
+  }
 }
 
 const k8sApi = kc.makeApiClient(CoreV1Api);
@@ -51,17 +54,23 @@ router.post("/", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Missing params" });
     }
 
-    await k8sApi.patchNamespacedPod({
-      name: pod,
-      namespace,
-      body: {
-        metadata: {
-          labels: {
-            quarantined: "true",
+    const warnings: string[] = [];
+
+    try {
+      await k8sApi.patchNamespacedPod({
+        name: pod,
+        namespace,
+        body: {
+          metadata: {
+            labels: {
+              quarantined: "true",
+            },
           },
         },
-      },
-    });
+      });
+    } catch (err: any) {
+      warnings.push(`k8s patch failed: ${err?.message || "unknown error"}`);
+    }
 
     const networkPolicy = {
       apiVersion: "networking.k8s.io/v1",
@@ -89,7 +98,9 @@ router.post("/", async (req: Request, res: Response) => {
       });
     } catch (err: any) {
       if (err?.code !== 409) {
-        throw err;
+        warnings.push(
+          `network policy failed: ${err?.message || "unknown error"}`,
+        );
       }
     }
 
@@ -106,9 +117,13 @@ router.post("/", async (req: Request, res: Response) => {
       pod,
       namespace,
       status: "quarantined",
+      warnings,
     });
-  } catch (_err) {
-    return res.status(500).json({ error: "Internal Server Error" });
+  } catch (err: any) {
+    return res.status(500).json({
+      error: "Internal Server Error",
+      details: err?.message,
+    });
   }
 });
 
@@ -119,6 +134,8 @@ router.delete("/", async (req: Request, res: Response) => {
     if (!namespace || !pod) {
       return res.status(400).json({ error: "Missing params" });
     }
+
+    const warnings: string[] = [];
 
     try {
       await k8sApi.patchNamespacedPod({
@@ -133,9 +150,7 @@ router.delete("/", async (req: Request, res: Response) => {
         },
       });
     } catch (err: any) {
-      if (err?.code !== 422) {
-        throw err;
-      }
+      warnings.push(`k8s unpatch failed: ${err?.message || "unknown error"}`);
     }
 
     try {
@@ -145,15 +160,13 @@ router.delete("/", async (req: Request, res: Response) => {
       });
     } catch (err: any) {
       if (err?.code !== 404) {
-        throw err;
+        warnings.push(
+          `network policy delete failed: ${err?.message || "unknown error"}`,
+        );
       }
     }
 
-    await Quarantined.deleteMany({
-      pod,
-      namespace,
-    });
-
+    await Quarantined.deleteMany({ pod, namespace });
     await upsertIncidentStatus(pod, namespace, "open");
 
     return res.status(200).json({
@@ -161,10 +174,13 @@ router.delete("/", async (req: Request, res: Response) => {
       pod,
       namespace,
       status: "open",
+      warnings,
     });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ error: "Internal Server Error" });
+  } catch (err: any) {
+    return res.status(500).json({
+      error: "Internal Server Error",
+      details: err?.message,
+    });
   }
 });
 

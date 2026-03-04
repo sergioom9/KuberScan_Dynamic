@@ -5,22 +5,32 @@ const router = express.Router();
 
 router.delete("/", async (req: Request, res: Response) => {
   try {
-    const { pod, namespace, id } = req.body;
+    const { _id, pod, namespace, id } = req.body;
 
-    if ((!pod || !namespace) && !id) {
+    if (!_id && !id && !(pod && namespace)) {
       return res.status(400).json({ error: "Missing params" });
     }
 
-    const filter = id ? { id } : { pod, namespace };
-    const result = await Incident.deleteMany(filter);
+    const filter: Record<string, unknown> = {};
+    if (_id) filter._id = _id;
+    else if (id) filter.id = id;
+    else {
+      filter.pod = pod;
+      filter.namespace = namespace;
+    }
+
+    const result = await Incident.deleteOne(filter);
 
     return res.status(200).json({
       success: true,
       deletedCount: result.deletedCount,
       filter,
     });
-  } catch (_err) {
-    return res.status(500).json({ error: "Internal Server Error" });
+  } catch (err: any) {
+    return res.status(500).json({
+      error: "Internal Server Error",
+      details: err?.message,
+    });
   }
 });
 

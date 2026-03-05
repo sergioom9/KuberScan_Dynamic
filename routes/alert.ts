@@ -74,7 +74,8 @@ router.post("/", async (req: Request, res: Response) => {
         await existingIncident.save();
       } else {
         const isQuarantined = await Quarantined.exists({ pod, namespace });
-        if(!isQuarantined) = await fetch("/pod/quarantine",{
+        if(!isQuarantined){ 
+          const putQuarantine = await fetch("/pod/quarantine",{
             method: "POST",
             headers: {
               "Content-Type": "application/json"
@@ -83,7 +84,7 @@ router.post("/", async (req: Request, res: Response) => {
               pod: pod,
               namespace: namespace
             })
-          })
+          }}
         const newIncident = new Incident({
           id: containerId,
           pod,
